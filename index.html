@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Short Form King · AOV</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+:root {
+  --bg: #0a0a0f; --surface: #111118; --border: #1e1e2e;
+  --green: #00e5a0; --blue: #4d9fff; --amber: #ffb84d;
+  --purple: #a78bfa; --red: #ff5f5f;
+  --text: #f0f0f8; --muted: #6b6b8a;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:'Syne',sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+
+.widget { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px; width:100%; max-width:440px; position:relative; overflow:hidden; }
+.widget::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--purple); }
+
+.widget-label { font-size:10px; font-weight:600; letter-spacing:.13em; text-transform:uppercase; color:var(--muted); margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+.wdot { width:7px; height:7px; border-radius:50%; background:var(--purple); box-shadow:0 0 7px rgba(167,139,250,.7); flex-shrink:0; }
+
+.widget-pills { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
+.preset-btn { background:var(--surface); border:1px solid var(--border); color:var(--muted); padding:5px 12px; border-radius:999px; font-family:'DM Mono',monospace; font-size:10px; cursor:pointer; transition:all .15s; letter-spacing:.03em; }
+.preset-btn:hover, .preset-btn.active { border-color:var(--purple); color:var(--purple); background:rgba(167,139,250,.06); }
+
+.widget-dates { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:18px; }
+.dlbl { font-family:'DM Mono',monospace; font-size:8px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:4px; }
+.date-input { background:#0d0d15; border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:'DM Mono',monospace; font-size:11px; padding:5px 10px; outline:none; color-scheme:dark; width:100%; }
+.date-input:focus { border-color:var(--purple); }
+
+.bignum { font-family:'DM Mono',monospace; font-size:52px; font-weight:500; line-height:1; color:var(--purple); margin-bottom:14px; }
+
+.widget-sub { display:flex; align-items:center; justify-content:space-between; }
+.widget-sub-txt { font-family:'DM Mono',monospace; font-size:12px; color:var(--muted); }
+.widget-sub-txt strong { color:var(--text); }
+
+.refresh-btn { background:var(--surface); border:1px solid var(--border); color:var(--muted); padding:6px 12px; border-radius:6px; font-family:'DM Mono',monospace; font-size:11px; cursor:pointer; transition:all .2s; }
+.refresh-btn:hover { border-color:var(--purple); color:var(--purple); }
+.refresh-btn:disabled { opacity:.4; cursor:not-allowed; }
+
+.spinner { width:22px; height:22px; border:2px solid var(--border); border-top-color:var(--purple); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="widget">
+  <div class="widget-label"><span class="wdot"></span>AOV</div>
+  <div class="widget-pills">
+    <button class="preset-btn active" onclick="setPreset('all',this)">All Time</button>
+    <button class="preset-btn" onclick="setPreset('today',this)">Today</button>
+    <button class="preset-btn" onclick="setPreset('week',this)">This Week</button>
+    <button class="preset-btn" onclick="setPreset('month',this)">This Month</button>
+    <button class="preset-btn" onclick="setPreset('quarter',this)">This Quarter</button>
+  </div>
+  <div class="widget-dates">
+    <div><div class="dlbl">From</div><input type="date" class="date-input" id="dateFrom" onchange="onDateChange()"></div>
+    <div><div class="dlbl">To</div><input type="date" class="date-input" id="dateTo" onchange="onDateChange()"></div>
+  </div>
+  <div class="bignum" id="bignum"><div class="spinner"></div></div>
+  <div class="widget-sub">
+    <div class="widget-sub-txt" id="subtxt">Loading...</div>
+    <button class="refresh-btn" id="refreshBtn" onclick="loadData()">↺</button>
+  </div>
+</div>
+
+<script>
+const API_KEY     = 'pit-7236385b-92df-4e5b-b225-ea07b3a32e38';
+const LOCATION_ID = 'Ssg47DJXtq6t7p6JBLG8';
+const CF_REVENUE  = 'X5tJUfY296WF3qGyCXjZ';
+const TAGS        = ['14k pif', '21k pif', 'payment plan'];
+
+const fmt = n => '$' + Math.round(n).toLocaleString('en-US');
+
+function parseAmt(val) {
+  if (!val) return 0;
+  const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function getCF(contact, fieldId) {
+  const f = (contact.customFields || []).find(f => f.id === fieldId);
+  return f ? (f.value || '') : '';
+}
+
+function toDateStr(d) { return d.toISOString().split('T')[0]; }
+
+async function fetchTaggedContacts(tag) {
+  let all = [];
+  let url = `https://services.leadconnectorhq.com/contacts/?locationId=${LOCATION_ID}&query=${encodeURIComponent(tag)}&limit=100`;
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${API_KEY}`, 'Version': '2021-07-28' }
+  });
+  if (!res.ok) throw new Error(`GHL API ${res.status}: ${res.statusText}`);
+  const data = await res.json();
+  return (data.contacts || []).filter(c => {
+    const tl = (c.tags || []).map(t => t.toLowerCase());
+    return tl.includes(tag.toLowerCase());
+  });
+}
+
+async function fetchAllTaggedContacts() {
+  const results = await Promise.all(TAGS.map(fetchTaggedContacts));
+  const seen = new Set(); const all = [];
+  for (const batch of results) {
+    for (const c of batch) {
+      if (!seen.has(c.id)) { seen.add(c.id); all.push(c); }
+    }
+  }
+  return all;
+}
+
+function applyDateFilter(contacts, fromVal, toVal) {
+  if (!fromVal && !toVal) return contacts;
+  const fromDate = fromVal ? new Date(fromVal + 'T00:00:00') : null;
+  const toDate   = toVal   ? new Date(toVal   + 'T23:59:59') : null;
+  return contacts.filter(c => {
+    const d = new Date(c.dateUpdated || c.dateAdded);
+    if (fromDate && d < fromDate) return false;
+    if (toDate   && d > toDate)   return false;
+    return true;
+  });
+}
+
+function setPreset(preset, el) {
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  const now = new Date(); let from = '', to = '';
+  if (preset === 'today') { from = to = toDateStr(now); }
+  else if (preset === 'week') { const d = new Date(now); d.setDate(d.getDate() - d.getDay() + (d.getDay()===0?-6:1)); from=toDateStr(d); to=toDateStr(now); }
+  else if (preset === 'month') { from=toDateStr(new Date(now.getFullYear(),now.getMonth(),1)); to=toDateStr(now); }
+  else if (preset === 'quarter') { const q=Math.floor(now.getMonth()/3); from=toDateStr(new Date(now.getFullYear(),q*3,1)); to=toDateStr(now); }
+  document.getElementById('dateFrom').value = from;
+  document.getElementById('dateTo').value   = to;
+  loadData();
+}
+
+function onDateChange() {
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  loadData();
+}
+
+async function loadData() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  document.getElementById('bignum').innerHTML = '<div class="spinner"></div>';
+  document.getElementById('subtxt').textContent = 'Loading...';
+
+  const fromVal    = document.getElementById('dateFrom').value;
+  const toVal      = document.getElementById('dateTo').value;
+  const rangeLabel = fromVal && toVal ? fromVal+' → '+toVal : fromVal ? 'From '+fromVal : toVal ? 'To '+toVal : 'All time';
+
+  try {
+    let contacts = await fetchAllTaggedContacts();
+    contacts = applyDateFilter(contacts, fromVal, toVal);
+
+    const revenues = contacts
+      .map(c => parseAmt(getCF(c, CF_REVENUE)))
+      .filter(v => v > 0);
+
+    const total = revenues.reduce((s,v) => s+v, 0);
+    const aov   = revenues.length > 0 ? Math.round(total / revenues.length) : 0;
+
+    document.getElementById('bignum').textContent = fmt(aov);
+    document.getElementById('subtxt').innerHTML =
+      `<strong>${revenues.length} deals</strong> · ${rangeLabel}`;
+  } catch(e) {
+    document.getElementById('bignum').textContent = '—';
+    document.getElementById('subtxt').textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+loadData();
+</script>
+</body>
+</html>
